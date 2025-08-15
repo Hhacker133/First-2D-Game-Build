@@ -1,0 +1,336 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1" />
+  <title>Advanced Runner — Fixed Targets & Big Shop (Fixed)</title>
+  <style>
+    :root{--bg1:#071022;--bg2:#0b1220;--accent:#ffd166;--danger:#ef476f}
+    *{box-sizing:border-box;font-family:Inter,system-ui,Arial}
+    html,body,#app{height:100%;margin:0;background:linear-gradient(180deg,var(--bg1),var(--bg2));color:#fff}
+    #app{display:flex;flex-direction:column}
+    header{display:flex;justify-content:space-between;align-items:center;padding:12px 16px;background:rgba(0,0,0,0.12)}
+    header .left{display:flex;gap:12px;align-items:center}
+    button{appearance:none;border:none;padding:10px 12px;border-radius:8px;background:#2563eb;color:#fff;cursor:pointer}
+    input{padding:10px;border-radius:8px;border:1px solid rgba(255,255,255,0.08);background:rgba(255,255,255,0.02);color:#fff}
+
+    /* screens */
+    .screen{display:none;flex-direction:column;align-items:center;justify-content:center;padding:24px;height:calc(100vh - 64px);overflow:auto}
+    .screen.active{display:flex}
+
+    /* shop */
+    .shop-grid{display:flex;gap:12px;flex-wrap:wrap}
+    .card{background:rgba(255,255,255,0.04);padding:12px;border-radius:10px;text-align:center;width:140px}
+    .tabs{display:flex;gap:8px;margin-bottom:12px}
+
+    /* canvas area */
+    #gameWrap{flex:1;display:flex;flex-direction:column}
+    #canvasContainer{flex:1;display:flex;align-items:center;justify-content:center;position:relative}
+    canvas{width:100%;height:100%;display:block}
+    .overlay-ui{position:absolute;left:12px;top:12px;background:rgba(0,0,0,0.35);padding:8px;border-radius:8px}
+
+    /* footer */
+    footer{padding:8px;text-align:center;font-size:13px;color:#cbd5e1}
+
+    /* small helpers */
+    .muted{opacity:0.8}
+    .coin{color:var(--accent);font-weight:700}
+
+    @media (max-width:600px){header{padding:8px}button{padding:8px 10px}}
+  </style>
+</head>
+<body>
+  <div id="app">
+    <header>
+      <div class="left">
+        <div id="title">Advanced Runner</div>
+        <div class="muted">Level: <span id="uiLevel">0</span></div>
+      </div>
+      <div>
+        <span class="muted">Coins: </span><span class="coin" id="uiCoins">0</span>
+        <span style="margin-left:8px" class="muted">Diamonds: </span><span class="coin" id="uiDiam">0</span>
+        <button id="openShop">Shop</button>
+        <button id="logout">Logout</button>
+      </div>
+    </header>
+
+    <!-- Login Screen -->
+    <div id="login" class="screen">
+      <h2>Login / Register</h2>
+      <input id="email" type="email" placeholder="Email" style="width:260px;margin-bottom:8px" />
+      <input id="password" type="password" placeholder="Password" style="width:260px;margin-bottom:12px" />
+      <div style="display:flex;gap:8px">
+        <button id="btnLogin">Login</button>
+        <button id="btnGuest">Play as Guest</button>
+      </div>
+      <p class="muted" style="max-width:320px;text-align:center;margin-top:12px">(Demo: credentials saved locally). To enable cloud save, configure API_URL in code.</p>
+    </div>
+
+    <!-- Shop Screen -->
+    <div id="shop" class="screen">
+      <h2>Character Shop</h2>
+      <div style="margin-bottom:8px">Your coins: <span class="coin" id="shopCoins">0</span> &nbsp;|&nbsp; Diamonds: <span class="coin" id="shopDiam">0</span></div>
+      <div class="tabs">
+        <button id="tabHumans">Humans</button>
+        <button id="tabAnimals">Animals</button>
+      </div>
+      <div id="shopGrid" class="shop-grid"></div>
+      <div style="margin-top:16px">
+        <button id="backToGame">Back to Game</button>
+      </div>
+    </div>
+
+    <!-- Game Screen -->
+    <div id="gameScreen" class="screen active" style="padding:0;align-items:stretch;justify-content:flex-start">
+      <div id="gameWrap">
+        <div id="canvasContainer">
+          <canvas id="game"></canvas>
+          <div class="overlay-ui">
+            <div>Score: <span id="uiScore">0</span></div>
+            <div>Highscore: <span id="uiHigh">0</span></div>
+            <div>Target: <span id="uiTarget">0</span></div>
+          </div>
+        </div>
+        <footer>Tap / Click to jump. Complete levels to earn coins (100 per level). Targets increase per level. 50 Humans & 50 Animals available in shop.</footer>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    // Fix applied: images object was not defined previously which caused ReferenceError.
+    // This file is the full updated game HTML with the images variable and loader added.
+
+    // CONFIG
+    const API_URL = ''; // set to backend for cloud saves
+    const AUDIO_ENABLED = false; // set true and drop real files into /assets/
+
+    /************ UI & auth ************/
+    const loginScreen = document.getElementById('login');
+    const shopScreen = document.getElementById('shop');
+    const gameScreen = document.getElementById('gameScreen');
+    const openShopBtn = document.getElementById('openShop');
+    const logoutBtn = document.getElementById('logout');
+    const backToGameBtn = document.getElementById('backToGame');
+    const shopGrid = document.getElementById('shopGrid');
+    const tabHumans = document.getElementById('tabHumans');
+    const tabAnimals = document.getElementById('tabAnimals');
+
+    // --- game state ---
+    let state = {
+      email: null,
+      coins: 0,
+      diamonds: 0,
+      level: 1,
+      score: 0,
+      high: 0,
+      owned: ['default'],
+      selected: 'default'
+    };
+
+    function show(id){
+      loginScreen.classList.remove('active'); shopScreen.classList.remove('active'); gameScreen.classList.remove('active');
+      document.getElementById(id).classList.add('active');
+    }
+
+    function loadState(){
+      const s = localStorage.getItem('runner_state');
+      if(s){ try{ Object.assign(state, JSON.parse(s)); } catch(e){ console.warn(e); } }
+      state.high = localStorage.getItem('runner_high') ? parseInt(localStorage.getItem('runner_high')) : state.high;
+      updateUI();
+    }
+
+    function saveState(){
+      localStorage.setItem('runner_state', JSON.stringify(state));
+      localStorage.setItem('runner_high', state.high);
+      if(API_URL && state.email && state.email!=='guest'){
+        fetch(API_URL + '/save', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email:state.email,state})}).catch(()=>{});
+      }
+    }
+
+    document.getElementById('btnLogin').addEventListener('click', async ()=>{
+      const email = document.getElementById('email').value.trim();
+      const password = document.getElementById('password').value;
+      if(!email || !password) return alert('Email aur password daalo');
+
+      const saved = localStorage.getItem('runner_user_'+email);
+      if(saved){ state = JSON.parse(saved); state.email = email; } else { state = {email, coins:0, diamonds:0, level:1, score:0, high:0, owned:['default'], selected:'default'}; localStorage.setItem('runner_user_'+email, JSON.stringify(state)); }
+      localStorage.setItem('runner_session', email);
+      loadState(); show('gameScreen');
+    });
+
+    document.getElementById('btnGuest').addEventListener('click', ()=>{ state.email = 'guest'; loadState(); show('gameScreen'); });
+
+    logoutBtn.addEventListener('click', ()=>{ localStorage.removeItem('runner_session'); show('login'); });
+    openShopBtn.addEventListener('click', ()=>{ populateShop('humans'); show('shop'); document.getElementById('shopCoins').textContent = state.coins; document.getElementById('shopDiam').textContent = state.diamonds; });
+    backToGameBtn.addEventListener('click', ()=>{ show('gameScreen'); updateUI(); });
+
+    tabHumans.addEventListener('click', ()=>{ populateShop('humans'); });
+    tabAnimals.addEventListener('click', ()=>{ populateShop('animals'); });
+
+    function buy(id, price){
+      if(id==='gold' && state.diamonds >= 3){ state.diamonds -=3; state.owned.push(id); state.selected = id; saveState(); alert('Purchased with diamonds '+id); updateUI(); return; }
+      if(state.coins >= price){ state.coins -= price; state.owned.push(id); state.selected = id; saveState(); alert('Kharid liya: '+id); updateUI(); }
+      else alert('Coins kam hain');
+    }
+
+    function updateUI(){
+      document.getElementById('uiCoins').textContent = state.coins;
+      document.getElementById('shopCoins').textContent = state.coins;
+      document.getElementById('uiDiam').textContent = state.diamonds;
+      document.getElementById('shopDiam').textContent = state.diamonds || 0;
+      document.getElementById('uiLevel').textContent = state.level;
+      document.getElementById('uiScore').textContent = state.score;
+      document.getElementById('uiHigh').textContent = state.high;
+      // levelTarget is declared later, but function declarations are hoisted. this is fine.
+      document.getElementById('uiTarget').textContent = levelTarget(state.level);
+    }
+
+    // auto session
+    const sess = localStorage.getItem('runner_session'); if(sess){ const saved = localStorage.getItem('runner_user_'+sess); if(saved){ state = JSON.parse(saved); state.email = sess; } }
+    loadState(); if(!state.email) show('login'); else show('gameScreen');
+
+    /************ Shop population: 50 humans & 50 animals (placeholders) ************/
+    const HUMANS = Array.from({length:50}, (_,i)=>({id:`human_${i+1}`, name:`Human ${i+1}`, price: 200 + (i*40)}));
+    const ANIMALS = Array.from({length:50}, (_,i)=>({id:`animal_${i+1}`, name:`Animal ${i+1}`, price: 250 + (i*45)}));
+
+    function populateShop(type){
+      shopGrid.innerHTML='';
+      const list = type==='animals' ? ANIMALS : HUMANS;
+      for(const item of list){
+        const div = document.createElement('div');
+        div.className='card';
+        div.innerHTML = `<div style="height:60px;display:flex;align-items:center;justify-content:center;background:#2b2f3a;border-radius:8px;margin-bottom:8px">${item.name}</div><div>${item.name}</div><div>Price: ${item.price}</div><button onclick="buy('${item.id}',${item.price})">Buy</button>`;
+        shopGrid.appendChild(div);
+      }
+      document.getElementById('shopCoins').textContent = state.coins;
+      document.getElementById('shopDiam').textContent = state.diamonds || 0;
+    }
+
+    /************ Audio loading & immediate jump sound ************/
+    const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    const sounds = {};
+    async function loadAudioFiles(){
+      if(!AUDIO_ENABLED) return;
+      const map = {jump:'/assets/jump.mp3', coin:'/assets/coin.mp3', hit:'/assets/hit.mp3', levelup:'/assets/levelup.mp3', diamond:'/assets/diamond.mp3'};
+      for(const k in map){ try{ const r = await fetch(map[k]); const ab = await r.arrayBuffer(); const buf = await audioCtx.decodeAudioData(ab); sounds[k]=buf; }catch(e){ console.warn('audio load failed',k); } }
+    }
+    function playBuffer(buf, vol=0.12){ if(!buf) return; const src = audioCtx.createBufferSource(); const g = audioCtx.createGain(); src.buffer = buf; g.gain.value = vol; src.connect(g); g.connect(audioCtx.destination); src.start(); }
+    function playJump(){ if(AUDIO_ENABLED) playBuffer(sounds.jump); else playTone('sine',450,0.06,0.06); }
+    function playCoin(){ if(AUDIO_ENABLED) playBuffer(sounds.coin); else playTone('triangle',900,0.08,0.06); }
+    function playHit(){ if(AUDIO_ENABLED) playBuffer(sounds.hit); else playTone('square',160,0.2,0.12); }
+    function playLevelUp(){ if(AUDIO_ENABLED) playBuffer(sounds.levelup); else playTone('sine',700,0.2,0.12); }
+    function playDiamond(){ if(AUDIO_ENABLED) playBuffer(sounds.diamond); else playTone('triangle',1200,0.16,0.08); }
+    function playTone(type, frequency, duration, gain=0.08){ const osc = audioCtx.createOscillator(); const g = audioCtx.createGain(); osc.type = type; osc.frequency.value = frequency; g.gain.value = gain; osc.connect(g); g.connect(audioCtx.destination); osc.start(); osc.stop(audioCtx.currentTime + duration); }
+    loadAudioFiles();
+
+    /************ Images & sprite loader (FIX for ReferenceError) ************/
+    // images object must exist before render() uses it — define it here and provide a small loader
+    const images = {};
+    function loadImage(key, url){
+      const img = new Image();
+      img.onload = () => { images[key] = img; };
+      img.onerror = () => { console.warn('Failed to load image', key, url); };
+      img.src = url;
+      return img;
+    }
+    // Example: to use real sprites, uncomment and place files in /assets/
+    // loadImage('coin_img','/assets/coin.png');
+    // loadImage('player_human','/assets/player_human.png');
+    // loadImage('player_animal','/assets/player_animal.png');
+
+    /************ Canvas & Game Logic (updated level target logic) ************/
+    const canvas = document.getElementById('game'); const ctx = canvas.getContext('2d');
+    function resize(){ canvas.width = window.innerWidth; canvas.height = window.innerHeight - document.querySelector('header').offsetHeight; }
+    window.addEventListener('resize', resize); resize();
+
+    let running=false, gameOver=false, lastTime=0, spawnTimer=0, score=0, speed=220;
+    const obstacles=[]; const coinsOnField=[]; const particles=[];
+    const player = {x:60,y:0,w:56,h:68,vy:0,grounded:false,jump:-560,gravity:1800,animFrame:0,animTimer:0};
+
+    function groundY(){ return canvas.height - 86; }
+
+    // Level target formula: level 1 = 500, multiplier per level (1.3)
+    function levelTarget(l){ const base = 500; const mult = 1.3; return Math.floor(base * Math.pow(mult, l-1)); }
+
+    function spawnObstacle(level){ const h = 30 + Math.random()*Math.min(140,30+level*2.2); const w = 22 + Math.random()*Math.min(70,20+level*1.8); obstacles.push({x:canvas.width+40,y:groundY()-h,w,h}); if(Math.random()<0.5){ const cx = canvas.width + 80 + Math.random()*140; const cy = groundY() - (60 + Math.random()*160); coinsOnField.push({x:cx,y:cy,r:12, collected:false}); } }
+
+    // particles
+    function emit(x,y,color,count=14){ for(let i=0;i<count;i++){ particles.push({x,y,vx:(Math.random()-0.5)*300, vy:(Math.random()-0.9)*300, life:0.6 + Math.random()*0.6, color}); } }
+    function updateParticles(dt){ for(let i=particles.length-1;i>=0;i--){ const p=particles[i]; p.vy += 1000*dt; p.x += p.vx*dt; p.y += p.vy*dt; p.life -= dt; if(p.life<=0) particles.splice(i,1); } }
+
+    // input: immediate sound on jump
+    function jump(){ if(!running){ startLevel(); return; } if(gameOver) return; if(player.grounded || player.vy > -150){ player.vy = player.jump; player.grounded=false; playJump(); emit(player.x+player.w/2, player.y+10, '#9bd166', 8); } }
+    window.addEventListener('mousedown', jump); window.addEventListener('touchstart', (e)=>{ e.preventDefault(); jump(); }, {passive:false}); window.addEventListener('keydown',(e)=>{ if(e.code==='Space' || e.code==='ArrowUp') jump(); });
+
+    function startLevel(){ if(audioCtx.state==='suspended') audioCtx.resume(); running=true; gameOver=false; lastTime=performance.now(); obstacles.length=0; coinsOnField.length=0; particles.length=0; spawnTimer=0; score=0; speed = 220 + (state.level-1)*10; player.y = groundY() - player.h; player.vy = 0; requestAnimationFrame(loop); }
+
+    function awardDiamondChance(){ if(Math.random() < 0.06){ state.diamonds = (state.diamonds || 0) + 1; playDiamond(); emit(canvas.width/2,canvas.height/3,'#9be7ff',30); alert('Lucky! You got a diamond'); } }
+
+    function endLevel(success){ running=false; gameOver=true; if(success){ state.coins += 100; awardDiamondChance(); state.level = Math.min(100, state.level + 1); playLevelUp(); emit(canvas.width/2,canvas.height/2,'#ffd166',80); alert('Level complete! +100 coins'); } else { playHit(); emit(player.x+player.w/2, player.y+player.h/2, '#ef476f', 30); alert('Game over!'); }
+      state.score = Math.max(state.score, Math.floor(score)); state.high = Math.max(state.high, Math.floor(score)); saveState(); updateUI(); show('shop'); }
+
+    function update(dt){ speed += dt * (1 + state.level*0.06); spawnTimer -= dt; const spawnInterval = Math.max(0.38, 1.0 - state.level*0.009); if(spawnTimer<=0){ spawnObstacle(state.level); spawnTimer = spawnInterval * (0.82 + Math.random()*0.36); }
+      // physics
+      player.vy += player.gravity * dt; player.y += player.vy * dt; const gy = groundY() - player.h; if(player.y >= gy){ player.y = gy; player.vy = 0; player.grounded=true; } else player.grounded=false;
+      // move obstacles & coins
+      for(let i=obstacles.length-1;i>=0;i--){ const ob = obstacles[i]; ob.x -= speed * dt; if(ob.x + ob.w < -50) obstacles.splice(i,1); }
+      for(let i=coinsOnField.length-1;i>=0;i--){ const c = coinsOnField[i]; c.x -= speed * dt; if(c.x + c.r < -50) coinsOnField.splice(i,1); }
+      // collisions
+      for(const ob of obstacles){ if(rectIntersect(player, ob)){ endLevel(false); return; } }
+      for(let i=coinsOnField.length-1;i>=0;i--){ const c = coinsOnField[i]; if(pointInRect(c.x, c.y, player)){ state.coins += 10; if(Math.random() < 0.015){ state.diamonds = (state.diamonds||0) + 1; playDiamond(); emit(c.x,c.y,'#9be7ff',18); } emit(c.x,c.y,'#ffd166',22); coinsOnField.splice(i,1); playCoin(); } }
+      // scoring
+      score += dt * (12 + state.level*3);
+      state.score = Math.floor(score); if(state.score > state.high){ state.high = state.score; }
+      // level completion using target function
+      const target = levelTarget(state.level);
+      if(state.score >= target){ endLevel(true); return; }
+      // update particles
+      updateParticles(dt);
+      // animation
+      player.animTimer += dt; if(player.animTimer > 0.1){ player.animTimer = 0; player.animFrame = (player.animFrame+1) % 6; }
+      updateUI(); }
+
+    function rectIntersect(a,b){ return !(a.x + a.w < b.x || a.x > b.x + b.w || a.y + a.h < b.y || a.y > b.y + b.h); }
+    function pointInRect(px,py,r){ return !(px < player.x || px > player.x+player.w || py < player.y || py > player.y+player.h); }
+
+    function render(){ // dynamic background hue
+      const hue = (state.level * 3.6) % 360; ctx.fillStyle = `hsl(${hue} 35% 9%)`; ctx.fillRect(0,0,canvas.width,canvas.height);
+      // moving parallax layers (simple)
+      const layerCount = 3; for(let i=0;i<layerCount;i++){ const offset = (performance.now()/1000*(i+1)*20) % canvas.width; ctx.fillStyle = `rgba(255,255,255,${0.01*(i+1)})`; for(let x = -offset; x<canvas.width+100; x+=160+(i*40)){ ctx.fillRect(x, groundY()- (i*18) - 20, 120, 6); } }
+      // ground
+      ctx.fillStyle = '#08304a'; ctx.fillRect(0, groundY(), canvas.width, 120);
+      // coins
+      for(const c of coinsOnField){ if(images && images.coin_img){ ctx.drawImage(images.coin_img, c.x - c.r, c.y - c.r, c.r*2, c.r*2); } else { ctx.beginPath(); ctx.arc(c.x, c.y, c.r, 0, Math.PI*2); ctx.fillStyle = '#ffd166'; ctx.fill(); ctx.closePath(); } }
+      // obstacles
+      ctx.fillStyle = '#ef476f'; for(const ob of obstacles){ ctx.fillRect(ob.x, ob.y, ob.w, ob.h); }
+      // particles
+      for(const p of particles){ ctx.fillStyle = p.color; ctx.fillRect(p.x, p.y, 4,4); }
+      // player sprite or rectangle
+      const p = player; // shadow
+      ctx.fillStyle = 'rgba(0,0,0,0.32)'; ctx.fillRect(p.x+8, groundY()+6, p.w, 10);
+      let color='#ffd166'; if(state.selected==='human') color='#ff8b66'; if(state.selected==='animal') color='#8bd3ff'; if(state.selected==='gold') color='#ffd700'; if(state.selected==='blue') color='#5eead4';
+      const playerKey = 'player_' + state.selected;
+      if(images && images[playerKey]){
+        const img = images[playerKey]; ctx.drawImage(img, p.x, p.y, p.w, p.h);
+      } else {
+        // simple animated body (bobbing)
+        let bob = p.grounded ? Math.sin(p.animFrame/3)*3 : 0; ctx.fillStyle = color; ctx.fillRect(p.x, p.y + bob, p.w, p.h);
+        ctx.fillStyle = '#111'; ctx.fillRect(p.x + p.w - 18, p.y + 14 + bob, 8, 8);
+      }
+    }
+
+    function loop(t){ const dt = Math.min((t - lastTime)/1000, 0.035); lastTime = t; update(dt); render(); if(!gameOver) requestAnimationFrame(loop); }
+
+    // start if user logged
+    if(state.email) startLevel();
+
+    // persist
+    window.addEventListener('beforeunload', ()=>{ saveState(); if(state.email && state.email!=='guest') localStorage.setItem('runner_user_'+state.email, JSON.stringify(state)); });
+
+    // initial UI
+    updateUI();
+  </script>
+</body>
+<script src="index.js"></script>
+</html>
+
